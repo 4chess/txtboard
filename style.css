@@ -1,0 +1,75 @@
+.infoBox{
+background:#ea8;
+border:1px solid #800;
+padding:0 5px;
+}
+body{
+color: maroon;
+font-family: arial,helvetica,sans-serif;
+font-size: 10pt;
+padding:5px;
+margin:5px;
+background: #ffe url("fade.png") top center repeat-x;
+}
+
+.postName{
+color: #117743;
+font-weight: 700;
+}
+.reply{
+margin:8px;
+padding:5px;
+background:#f0e0d6;
+border: 1px solid #d9bfb7;
+}
+#postBox{
+margin:8px;
+background:#f0e0d6;
+border: 1px solid #d9bfb7
+}
+td:first-child{
+background-color: #ea8;
+color: #800;
+font-weight: 700;
+border: 1px solid #800;
+padding: 0 5px;
+font-size: 10pt;
+}
+textarea{
+width:320px;
+height:100;
+}
+#powered{
+margin:8px;
+padding:5px;
+font-size:8px;
+font-weight:800;
+}
+
+
+.pagination a {
+  font-size: 16px;        /* Makes text larger */
+  padding: 5px 10px;      /* Adds space inside each link */
+  margin: 0 5px;          /* Adds space between each link */
+  border: 1px solid #d9bfb7; /* Optional: Adds a border */
+  text-decoration: none;  /* Removes underline from links */
+  color: #117743;         /* Text color for links */
+  border-radius: 5px;     /* Optional: Rounds corners of border */
+}
+
+.pagination a.active, .pagination a:hover {
+  background-color: #d9bfb7; /* Background color for active/hover state */
+  color: #fff;           /* Text color for active/hover state */
+}
+
+
+
+
+
+
+
+
+
+
+
+
