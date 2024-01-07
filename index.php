@@ -1,46 +1,76 @@
 <?php
-// Define a constant for the number of posts per page
+// Constants
 define('POSTS_PER_PAGE', 30);
+define('MAX_POST_LENGTH', 600000);
 
-// Set up the database connection and create tables if they don't exist
+// Database Connection
 try {
     $db = new PDO('sqlite:posts.db');
     $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $db->exec('CREATE TABLE IF NOT EXISTS posts (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, post TEXT NOT NULL, date DATETIME DEFAULT CURRENT_TIMESTAMP)');
     $db->exec('CREATE TABLE IF NOT EXISTS replies (id INTEGER PRIMARY KEY AUTOINCREMENT, postId INTEGER NOT NULL, name TEXT NOT NULL, reply TEXT NOT NULL, date DATETIME DEFAULT CURRENT_TIMESTAMP)');
 } catch (Exception $e) {
-    die('Error establishing database connection: ' . $e->getMessage());
+    exit('Error establishing database connection: ' . htmlspecialchars($e->getMessage()));
 }
 
-// Initialize variables
-$mode = filter_input(INPUT_GET, 'mode', FILTER_SANITIZE_FULL_SPECIAL_CHARS);
+// CSRF Token Generation and Validation (for forms)
+session_start();
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$csrf_token = $_SESSION['csrf_token'];
+
+// Functions
+function validateInput($input, $type = 'string') {
+    if ($input === null) {
+        return '';
+    }
+    return trim(htmlspecialchars($input));
+}
+
+// Input Handling
+$mode = validateInput(filter_input(INPUT_GET, 'mode', FILTER_SANITIZE_FULL_SPECIAL_CHARS));
 $postId = filter_input(INPUT_GET, 'postId', FILTER_VALIDATE_INT);
+$error = '';
 
-// Handle POST submissions
+// POST Submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $name = filter_input(INPUT_POST, 'name', FILTER_SANITIZE_FULL_SPECIAL_CHARS) ?: 'Anonymous';
-    $post = filter_input(INPUT_POST, 'post', FILTER_SANITIZE_FULL_SPECIAL_CHARS);
-
-    if ($mode === 'reply' && $postId) {
-        // Insert reply into database
-        $stmt = $db->prepare('INSERT INTO replies (postId, name, reply) VALUES (:postId, :name, :reply)');
-        $stmt->bindParam(':postId', $postId);
-        $stmt->bindParam(':reply', $post);
-    } else {
-        // Insert new post into database
-        $stmt = $db->prepare('INSERT INTO posts (name, post) VALUES (:name, :post)');
-        $stmt->bindParam(':post', $post);
+    if (!hash_equals($csrf_token, $_POST['csrf_token'])) {
+        exit('Invalid CSRF token');
     }
 
-    $stmt->bindParam(':name', $name);
-    $stmt->execute();
+    $name = validateInput($_POST['name'] ?: 'Anonymous');
+    $post = validateInput($_POST['post']);
+    $post_length = mb_strlen($post, 'UTF-8');
 
-    // Redirect to prevent resubmission
-    header('Location: ' . $_SERVER['PHP_SELF'] . ($mode === 'reply' && $postId ? "?mode=reply&postId=$postId" : ''));
-    exit;
+    // Debugging: Log the length of the post
+    error_log("Length of the post: " . $post_length);
+
+    if (!empty($post) && $post_length <= MAX_POST_LENGTH) {
+        try {
+            if ($mode === 'reply' && $postId) {
+                $stmt = $db->prepare('INSERT INTO replies (postId, name, reply) VALUES (:postId, :name, :reply)');
+                $stmt->bindValue(':postId', $postId, PDO::PARAM_INT);
+                $stmt->bindValue(':name', $name, PDO::PARAM_STR);
+                $stmt->bindValue(':reply', $post, PDO::PARAM_STR);
+            } else {
+                $stmt = $db->prepare('INSERT INTO posts (name, post) VALUES (:name, :post)');
+                $stmt->bindParam(':name', $name);
+                $stmt->bindParam(':post', $post);
+            }
+            $stmt->execute();
+
+            header('Location: ' . $_SERVER['PHP_SELF'] . ($mode === 'reply' && $postId ? "?mode=reply&postId=$postId" : ''));
+            exit;
+        } catch (Exception $e) {
+            $error = 'Error processing your request: ' . htmlspecialchars($e->getMessage());
+        }
+    } else {
+        $error = empty($post) ? 'Post content cannot be empty.' : 'Post exceeds the maximum allowed length of ' . MAX_POST_LENGTH . ' characters. Actual length: ' . $post_length;
+    }
 }
 
-// Fetch posts for the main board
+// Fetch Posts or Replies
 if (!$mode) {
     $page = filter_input(INPUT_GET, 'page', FILTER_VALIDATE_INT) ?: 1;
     $offset = ($page - 1) * POSTS_PER_PAGE;
@@ -50,16 +80,19 @@ if (!$mode) {
     $postsStmt->execute();
 }
 
-// Fetch replies if in reply mode
 if ($mode === 'reply' && $postId) {
     $postStmt = $db->prepare('SELECT * FROM posts WHERE id = :id');
     $postStmt->bindParam(':id', $postId, PDO::PARAM_INT);
     $postStmt->execute();
-    $post = $postStmt->fetch();
+    $post = $postStmt->fetch(PDO::FETCH_ASSOC);
 
-    $repliesStmt = $db->prepare('SELECT * FROM replies WHERE postId = :postId ORDER BY date ASC');
-    $repliesStmt->bindParam(':postId', $postId, PDO::PARAM_INT);
-    $repliesStmt->execute();
+    if (!$post) {
+        $error = "The requested post does not exist.";
+    } else {
+        $repliesStmt = $db->prepare('SELECT * FROM replies WHERE postId = :postId ORDER BY date ASC');
+        $repliesStmt->bindParam(':postId', $postId, PDO::PARAM_INT);
+        $repliesStmt->execute();
+    }
 }
 ?>
 
@@ -73,7 +106,11 @@ if ($mode === 'reply' && $postId) {
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <?php if ($mode === 'reply' && $postId): ?>
+    <?php if (!empty($error)): ?>
+        <p class="error"><?= htmlspecialchars($error) ?></p>
+    <?php endif; ?>
+
+    <?php if ($mode === 'reply' && $postId && $post): ?>
         <!-- Reply Mode -->
         <h1>Reply Mode</h1>
         <a href='index.php'>Back to Main Board</a>
@@ -81,6 +118,7 @@ if ($mode === 'reply' && $postId) {
         <!-- Reply Submission Form -->
         <div id='postBox' class='infoBox'>
             <form method="post">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
                 <table>
                     <tr>
                         <td>Name:</td>
@@ -88,7 +126,7 @@ if ($mode === 'reply' && $postId) {
                     </tr>
                     <tr>
                         <td>Post:</td>
-                        <td><textarea name="post"></textarea></td>
+                        <td><textarea name="post" required></textarea></td>
                     </tr>
                 </table>
             </form>
@@ -96,24 +134,27 @@ if ($mode === 'reply' && $postId) {
 
         <!-- Display the Original Post -->
         <div class='reply'>
-            <span class='postName'><?= htmlspecialchars($post['name']) ?></span>
-            <p class='postText'><?= nl2br(htmlspecialchars($post['post'])) ?></p>
+            <span class='postName'><?= htmlspecialchars($post ? $post['name'] : '') ?></span>
+            <p class='postText'><?= nl2br(htmlspecialchars($post ? $post['post'] : '')) ?></p>
         </div>
 
         <!-- Display Replies to the Post -->
         <div id='replies'>
-            <?php while ($reply = $repliesStmt->fetch()): ?>
+            <?php while ($reply = $repliesStmt->fetch(PDO::FETCH_ASSOC)): ?>
                 <div class='reply'>
                     <span class='postName'><?= htmlspecialchars($reply['name']) ?></span>
                     <p class='postText'><?= nl2br(htmlspecialchars($reply['reply'])) ?></p>
                 </div>
             <?php endwhile; ?>
         </div>
+    <?php elseif ($mode === 'reply' && $postId): ?>
+        <p><?= htmlspecialchars($error) ?></p>
     <?php else: ?>
         <!-- Main Board -->
         <div id='postBox' class='infoBox'>
             <!-- New Post Submission Form -->
             <form method="post">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
                 <table>
                     <tr>
                         <td>Name:</td>
@@ -121,7 +162,7 @@ if ($mode === 'reply' && $postId) {
                     </tr>
                     <tr>
                         <td>Post:</td>
-                        <td><textarea name="post"></textarea></td>
+                        <td><textarea name="post" required></textarea></td>
                     </tr>
                 </table>
             </form>
@@ -129,7 +170,7 @@ if ($mode === 'reply' && $postId) {
 
         <!-- Display Posts and Replies Link -->
         <div id='posts'>
-            <?php while ($post = $postsStmt->fetch()): ?>
+            <?php while ($post = $postsStmt->fetch(PDO::FETCH_ASSOC)): ?>
                 <div class='reply'>
                     <span class='postName'>
                         <?= htmlspecialchars($post['name']) ?>
